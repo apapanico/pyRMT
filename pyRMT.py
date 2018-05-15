@@ -70,7 +70,8 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from sklearn.covariance import EmpiricalCovariance
+from sklearn.covariance import EmpiricalCovariance, empirical_covariance
+from sklearn.isotonic import isotonic_regression
 from sklearn.preprocessing import StandardScaler
 
 
@@ -85,6 +86,8 @@ __all__ = ['clipped', 'directKernel', 'marcenkoPastur',
            'optimalShrinkage', 'poolAdjacentViolators', 
            'stieltjes']
 
+
+np.set_printoptions(precision=3)
 
 def checkDesignMatrix(X):
     """
@@ -606,7 +609,7 @@ def optimalShrinkage(X, return_covariance=False, method='rie'):
     return E_RIE
 
   
-def directKernel(q, T, N, eigvals):
+def directKernel(X):
     """This function computes a non linear shrinkage estimator of a covariance marix
        based on the spectral distribution of its eigenvalues and that of its Hilbert Tranform.
        This is an extension of Ledoit & Péché(2011).
@@ -641,37 +644,46 @@ def directKernel(q, T, N, eigvals):
     """
     
     # compute direct kernel estimator
-    lambdas = eigvals[max(0, N - T):].T  # transpose to have a column vector
-    
+    T, N = X.shape
+    T -= 1
+    q = N / T
+    S = np.cov(X, rowvar=False)
+    lam, U = np.linalg.eigh(S)
+    isort = np.argsort(lam)
+    U = U[:, isort]
+    lam = lam[max(0, N - T):]
+
     h = np.power(T, -0.35)  # Equation (5.4)
     h_squared = h ** 2
     
-    L = np.matlib.repmat(lambdas, N, 1).T
+    L = np.tile(lam.reshape(-1, 1), (1, min(N, T)))
     Lt = L.transpose()
     square_Lt = h_squared * (Lt ** 2)
+    L_Lt_diff = L - Lt
+    L_Lt_diff_square = L_Lt_diff ** 2
     
-    zeros = np.zeros((N, N))
+    tmp = np.sqrt(np.maximum(4 * square_Lt - L_Lt_diff_square, 0)) / \
+        (2 * np.pi * square_Lt)
+    f_tilde = np.mean(tmp, axis=1)    # Equation (5.2)
     
-    tmp = np.sqrt(np.maximum(4 * square_Lt - (L - Lt) ** 2, zeros)) / (2 * np.pi * square_Lt)
-    f_tilde = np.mean(tmp, axis=0)    # Equation (5.2)
-    
-    tmp = np.sign(L - Lt) * np.sqrt(np.maximum((L - Lt) ** 2 - 4 * square_Lt, zeros)) - L + Lt 
+    tmp = np.sign(L_Lt_diff) * np.sqrt(np.maximum(L_Lt_diff_square - 4 * square_Lt, 0)) - L_Lt_diff
     tmp /= 2 * np.pi * square_Lt
     Hf_tilde = np.mean(tmp, axis=1)    # Equation (5.3)
     
     if N <= T:
-        tmp = (np.pi * q * lambdas * f_tilde) ** 2
-        tmp += (1 - q - np.pi * q * lambdas * Hf_tilde) ** 2
-        d_tilde = lambdas / tmp    # Equation (4.3)
+        tmp = (np.pi * q * lam * f_tilde) ** 2
+        tmp += (1 - q - np.pi * q * lam * Hf_tilde) ** 2
+        d_tilde = lam / tmp    # Equation (4.3)
     else:
-        Hf_tilde_0 = (1 - np.sqrt(1 - 4 * h_squared)) / (2 * np.pi * h_squared) * np.mean(1. / lambdas)  # Equation (C.8)
+        Hf_tilde_0 = (1 - np.sqrt(1 - 4 * h_squared)) / (2 * np.pi * h_squared) * np.mean(1. / lam)  # Equation (C.8)
         d_tilde_0 = 1 / (np.pi * (N - T) / T * Hf_tilde_0)  # Equation (C.5)
-        d_tilde_1 = lambdas / ((np.pi ** 2) * (lambdas ** 2) * (f_tilde ** 2 + Hf_tilde ** 2))  # Equation (C.4)
-        d_tilde = np.concatenate(np.dot(d_tilde_0, np.ones(N - T, 1, np.float)), d_tilde_1)
+        d_tilde_1 = lam / ((np.pi ** 2) * (lam ** 2) * (f_tilde ** 2 + Hf_tilde ** 2))  # Equation (C.4)
+        d_tilde = np.concatenate([d_tilde_0 * np.ones(N - T), d_tilde_1])
+        # d_tilde = np.concatenate(np.dot(d_tilde_0, np.ones(N - T, 1, np.float)), d_tilde_1)
         
     d_hats = poolAdjacentViolators(d_tilde) # Equation (4.5)
     
-    return d_hats
+    return U @ np.diag(d_hats) @ U.T
 
   
 # Author : Alexandre Gramfort
@@ -715,6 +727,32 @@ def poolAdjacentViolators(y):
             lvlsets[i, 1] = last
             
     return v
+
+
+
+def kfold_cv(X, K=10, isotonic=True):
+    """K-fold cross-validated eigenvalues for LW nonlinear shrinkage"""
+    S = empirical_covariance(X)
+    lam, U = np.linalg.eigh(S)
+    d = _nls_cv(X, S, K)
+    if isotonic:
+        d = isotonic_regression(d, increasing=True)
+    return U @ np.diag(d) @ U.T
+
+
+def _nls_cv(X, S, K):
+    T, N = X.shape
+    m = int(T / K)
+    d = np.zeros(N)
+    for k in range(K):
+        k_set = list(range(k * m, (k + 1) * m))
+        X_k = X[k_set, :]
+        S_k = (T * S - X_k.T.dot(X_k)) / (T - m)
+        _, U_k = np.linalg.eigh(S_k)
+        tmp = (U_k.T.dot(X_k.T)**2).sum(axis=1)
+        d += tmp / T
+    return d
+
 
   
 if __name__ == '__main__':
