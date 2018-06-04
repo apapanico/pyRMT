@@ -645,12 +645,56 @@ def directKernel(X):
     
     # compute direct kernel estimator
     T, N = X.shape
+
+    u, s, vt = np.linalg.svd(X, full_matrices=True)
+
+    lam = np.zeros(N)
+    lam[:T] = s**2 / T
+    lam = lam[::-1].copy()
+    V = vt.T[:, ::-1]
+
+    d_hats = directKernel_eigvals(lam, T, N)
+    return (V * d_hats) @ V.T
+
+
+
+def directKernel_eigvals(lam, T, N):
+    """This function computes a non linear shrinkage estimator of a covariance marix
+       based on the spectral distribution of its eigenvalues and that of its Hilbert Tranform.
+       This is an extension of Ledoit & Péché(2011).
+       
+       This is a port of the Matlab code provided by O. Ledoit and M .Wolf. This port 
+       uses the Pool Adjacent Violators (PAV) algorithm by Alexandre Gramfort 
+       (EMAP toolbox). See below for a Python implementation of PAV.
+                
+       Parameters
+       ----------
+       q: type derived from numbers.Real
+           Ratio of N/T
+           
+       T: type derived from numbers.Integral
+          Number of samples
+    
+       N: type derived from numbers.Integral
+           Dimension of a correlation matrix
+       
+       eigvals: Vector of the covariance matrix eigenvalues
+       
+       Returns
+       -------
+       dhats: A vector of eigenvalues estimates
+       
+       References
+       ----------
+       * "Eigenvectors of some large sample covariance matrix ensembles",
+         O. Ledoit and S. Peche (2011)
+       * "Direct Nonlinear Shrinkage Estimation of Large-Dimensional Covariance Matrices (September 2017)", 
+         O. Ledoit and M. Wolf https://ssrn.com/abstract=3047302 or http://dx.doi.org/10.2139/ssrn.3047302
+    """
+    
+    # compute direct kernel estimator
     T -= 1
     q = N / T
-    S = np.cov(X, rowvar=False)
-    lam, U = np.linalg.eigh(S)
-    isort = np.argsort(lam)
-    U = U[:, isort]
     lam = lam[max(0, N - T):]
 
     h = np.power(T, -0.35)  # Equation (5.4)
@@ -683,8 +727,7 @@ def directKernel(X):
         
     d_hats = poolAdjacentViolators(d_tilde) # Equation (4.5)
     
-    return U @ np.diag(d_hats) @ U.T
-
+    return d_hats
   
 # Author : Alexandre Gramfort
 # license : BSD
