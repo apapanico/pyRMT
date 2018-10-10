@@ -32,7 +32,7 @@ setup(name = 'pyRMT',
       
       py_modules = ['pyRMT'],
       platforms = 'ALL',
-      install_requires = ['numpy', 'pandas', 'sklearn'],
+      install_requires = ['numpy', 'pandas', 'scikit-learn'],
       setup_requires = ['numpy'],
                           
       classifiers = ['Development Status :: 4 - Beta',
